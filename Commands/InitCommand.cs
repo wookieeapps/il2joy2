@@ -1,5 +1,6 @@
 using Il2Joy2.Models;
 using Il2Joy2.Services;
+using Spectre.Console;
 
 namespace Il2Joy2.Commands;
 
@@ -24,51 +25,74 @@ public class InitCommand
     
     public int Execute(string devicesFilePath, string bindingsFilePath)
     {
-        Console.WriteLine("=== IL2 Joystick Manager - Initialize Configuration ===\n");
+        AnsiConsole.Write(new Rule("[cyan1]Initialize Configuration[/]").LeftJustified());
+        AnsiConsole.WriteLine();
         
         // Validate paths
         if (!File.Exists(devicesFilePath))
         {
-            Console.WriteLine($"ERROR: Devices file not found: {devicesFilePath}");
+            AnsiConsole.MarkupLine($"[red]ERROR:[/] Devices file not found: [yellow]{devicesFilePath}[/]");
             return 1;
         }
         
         if (!File.Exists(bindingsFilePath))
         {
-            Console.WriteLine($"ERROR: Bindings file not found: {bindingsFilePath}");
+            AnsiConsole.MarkupLine($"[red]ERROR:[/] Bindings file not found: [yellow]{bindingsFilePath}[/]");
             return 1;
         }
         
         // Check for existing config
         if (_appConfigService.ConfigExists())
         {
-            Console.Write("Configuration already exists. Overwrite? (y/N): ");
-            var response = Console.ReadLine()?.Trim().ToLowerInvariant();
-            if (response != "y" && response != "yes")
+            if (!AnsiConsole.Confirm("[yellow]Configuration already exists. Overwrite?[/]", false))
             {
-                Console.WriteLine("Initialization cancelled.");
+                AnsiConsole.MarkupLine("[yellow]Initialization cancelled.[/]");
                 return 0;
             }
         }
         
         // Parse IL2 devices file
-        Console.WriteLine($"Reading IL2 devices file: {devicesFilePath}");
-        var il2Devices = _il2ConfigService.ParseDevicesFile(devicesFilePath);
-        Console.WriteLine($"Found {il2Devices.Count} device(s) in IL2 config.\n");
+        List<Il2Device> il2Devices = [];
+        AnsiConsole.Status()
+            .Start("[yellow]Reading IL2 devices file...[/]", ctx =>
+            {
+                ctx.Spinner(Spinner.Known.Dots);
+                il2Devices = _il2ConfigService.ParseDevicesFile(devicesFilePath);
+            });
+        
+        AnsiConsole.MarkupLine($"[green]Found {il2Devices.Count} device(s) in IL2 config.[/]\n");
+        
+        var il2Table = new Table()
+            .Border(TableBorder.Rounded)
+            .BorderColor(Color.Cyan1)
+            .AddColumn(new TableColumn("[cyan]Index[/]").Centered())
+            .AddColumn(new TableColumn("[green]Device Name[/]"))
+            .AddColumn(new TableColumn("[blue]GUID[/]"));
         
         foreach (var device in il2Devices)
         {
-            Console.WriteLine($"  [{device.Id}] {device.Model} (GUID: {device.Guid})");
+            il2Table.AddRow($"[cyan]joy{device.Id}[/]", Markup.Escape(device.Model), $"[dim]{Markup.Escape(device.Guid)}[/]");
         }
         
+        AnsiConsole.Write(il2Table);
+        AnsiConsole.WriteLine();
+        
         // Get currently connected devices
-        Console.WriteLine("\nScanning connected devices...");
-        var connectedDevices = _enumerator.EnumerateJoysticks();
-        Console.WriteLine($"Found {connectedDevices.Count} connected device(s).\n");
+        List<JoystickDevice> connectedDevices = [];
+        AnsiConsole.Status()
+            .Start("[yellow]Scanning connected devices...[/]", ctx =>
+            {
+                ctx.Spinner(Spinner.Known.Dots);
+                connectedDevices = _enumerator.EnumerateJoysticks();
+            });
+        
+        AnsiConsole.MarkupLine($"[green]Found {connectedDevices.Count} connected device(s).[/]\n");
         
         // Match IL2 devices with connected devices
         var mappings = new List<DeviceMapping>();
         var unmatchedIl2Devices = new List<Il2Device>();
+        
+        AnsiConsole.MarkupLine("[yellow]Matching devices...[/]\n");
         
         foreach (var il2Device in il2Devices)
         {
@@ -85,25 +109,32 @@ public class InitCommand
                     Guid = il2Device.Guid
                 });
                 
-                Console.WriteLine($"? Matched [{il2Device.Id}] {il2Device.Model}");
-                Console.WriteLine($"  -> {matchedDevice.UniqueIdentifier}");
+                AnsiConsole.MarkupLine($"  [green]?[/] Matched [cyan]joy{il2Device.Id}[/] {Markup.Escape(il2Device.Model)}");
+                AnsiConsole.MarkupLine($"    [dim]? {Markup.Escape(matchedDevice.UniqueIdentifier)}[/]");
             }
             else
             {
                 unmatchedIl2Devices.Add(il2Device);
-                Console.WriteLine($"? Could not match [{il2Device.Id}] {il2Device.Model}");
+                AnsiConsole.MarkupLine($"  [red]?[/] Could not match [cyan]joy{il2Device.Id}[/] {Markup.Escape(il2Device.Model)}");
             }
         }
         
         if (unmatchedIl2Devices.Count > 0)
         {
-            Console.WriteLine($"\nWARNING: {unmatchedIl2Devices.Count} device(s) could not be matched.");
-            Console.WriteLine("Make sure all your joysticks are connected before running init.");
-            Console.Write("\nContinue with partial configuration? (y/N): ");
-            var response = Console.ReadLine()?.Trim().ToLowerInvariant();
-            if (response != "y" && response != "yes")
+            AnsiConsole.WriteLine();
+            var warningPanel = new Panel(
+                $"[yellow]{unmatchedIl2Devices.Count} device(s) could not be matched.[/]\n" +
+                "[dim]Make sure all your joysticks are connected before running init.[/]")
             {
-                Console.WriteLine("Initialization cancelled.");
+                Header = new PanelHeader(" [yellow]WARNING[/] ", Justify.Left),
+                Border = BoxBorder.Rounded,
+                BorderStyle = new Style(Color.Yellow)
+            };
+            AnsiConsole.Write(warningPanel);
+            
+            if (!AnsiConsole.Confirm("\n[yellow]Continue with partial configuration?[/]", false))
+            {
+                AnsiConsole.MarkupLine("[yellow]Initialization cancelled.[/]");
                 return 1;
             }
         }
@@ -116,10 +147,17 @@ public class InitCommand
             DeviceMappings = mappings
         };
         
+        AnsiConsole.WriteLine();
         _appConfigService.SaveConfig(config);
         
-        Console.WriteLine($"\n? Configuration initialized with {mappings.Count} device mapping(s).");
-        Console.WriteLine($"  Config file: {_appConfigService.GetConfigPath()}");
+        var successPanel = new Panel(
+            $"[green]? Configuration initialized with {mappings.Count} device mapping(s).[/]\n" +
+            $"[dim]Config file:[/] [yellow]{_appConfigService.GetConfigPath()}[/]")
+        {
+            Border = BoxBorder.Rounded,
+            BorderStyle = new Style(Color.Green)
+        };
+        AnsiConsole.Write(successPanel);
         
         return 0;
     }

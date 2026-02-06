@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Il2Joy2.Models;
+using Spectre.Console;
 
 namespace Il2Joy2.Services;
 
@@ -34,7 +35,7 @@ public sealed class AppConfigService
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error loading config: {ex.Message}");
+            AnsiConsole.MarkupLine($"[red]Error loading config:[/] [dim]{ex.Message}[/]");
             return null;
         }
     }
@@ -46,7 +47,7 @@ public sealed class AppConfigService
     {
         var json = JsonSerializer.Serialize(config, AppJsonContext.Default.AppConfig);
         File.WriteAllText(_configPath, json);
-        Console.WriteLine($"Configuration saved to: {_configPath}");
+        AnsiConsole.MarkupLine($"[green]?[/] Configuration saved to: [yellow]{_configPath}[/]");
     }
     
     /// <summary>

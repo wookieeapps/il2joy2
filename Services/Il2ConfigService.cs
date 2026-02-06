@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using System.Web;
 using Il2Joy2.Models;
+using Spectre.Console;
 
 namespace Il2Joy2.Services;
 
@@ -64,7 +65,7 @@ public sealed partial class Il2ConfigService
         if (File.Exists(filePath))
         {
             var backupPath = _backupService.CreateBackup(filePath);
-            Console.WriteLine($"  Backup created: {backupPath}");
+            AnsiConsole.MarkupLine($"  [dim]Backup:[/] [yellow]{Path.GetFileName(backupPath)}[/]");
         }
 
         var lines = new List<string> { "configId,guid,model|" };
@@ -93,7 +94,7 @@ public sealed partial class Il2ConfigService
         
         if (indexMapping.Count == 0)
         {
-            Console.WriteLine("No index changes needed.");
+            AnsiConsole.MarkupLine("[dim]No index changes needed.[/]");
             return;
         }
         
@@ -115,14 +116,14 @@ public sealed partial class Il2ConfigService
         {
             // Create timestamped backup before writing
             var backupPath = _backupService.CreateBackup(filePath);
-            Console.WriteLine($"  Backup created: {backupPath}");
+            AnsiConsole.MarkupLine($"  [dim]Backup:[/] [yellow]{Path.GetFileName(backupPath)}[/]");
             
             File.WriteAllLines(filePath, updatedLines);
-            Console.WriteLine($"  Updated {changesCount} lines in bindings file.");
+            AnsiConsole.MarkupLine($"  [green]?[/] Updated [cyan]{changesCount}[/] lines in bindings file.");
         }
         else
         {
-            Console.WriteLine("No changes needed in bindings file.");
+            AnsiConsole.MarkupLine("[dim]No changes needed in bindings file.[/]");
         }
     }
     

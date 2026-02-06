@@ -1,5 +1,6 @@
 using Il2Joy2.Models;
 using Il2Joy2.Services;
+using Spectre.Console;
 
 namespace Il2Joy2.Commands;
 
@@ -24,34 +25,41 @@ public class UpdateCommand
     
     public int Execute()
     {
-        Console.WriteLine("=== IL2 Joystick Manager - Update Check ===\n");
+        AnsiConsole.Write(new Rule("[cyan1]Update Check[/]").LeftJustified());
+        AnsiConsole.WriteLine();
         
         // Load configuration
         var config = _appConfigService.LoadConfig();
         if (config == null)
         {
-            Console.WriteLine("ERROR: No configuration found.");
-            Console.WriteLine("Run with 'init <devices.txt> <bindings.txt>' to create initial configuration.");
+            AnsiConsole.MarkupLine("[red]ERROR:[/] No configuration found.");
+            AnsiConsole.MarkupLine("Run [cyan]il2joy2 init <config_folder>[/] to create initial configuration.");
             return 1;
         }
         
         // Validate IL2 files exist
         if (!File.Exists(config.DevicesFilePath))
         {
-            Console.WriteLine($"ERROR: IL2 devices file not found: {config.DevicesFilePath}");
+            AnsiConsole.MarkupLine($"[red]ERROR:[/] IL2 devices file not found: [yellow]{config.DevicesFilePath}[/]");
             return 1;
         }
         
         if (!File.Exists(config.BindingsFilePath))
         {
-            Console.WriteLine($"ERROR: IL2 bindings file not found: {config.BindingsFilePath}");
+            AnsiConsole.MarkupLine($"[red]ERROR:[/] IL2 bindings file not found: [yellow]{config.BindingsFilePath}[/]");
             return 1;
         }
         
         // Get current connected devices
-        Console.WriteLine("Scanning connected devices...");
-        var connectedDevices = _enumerator.EnumerateJoysticks();
-        Console.WriteLine($"Found {connectedDevices.Count} connected device(s).\n");
+        List<JoystickDevice> connectedDevices = [];
+        AnsiConsole.Status()
+            .Start("[yellow]Scanning connected devices...[/]", ctx =>
+            {
+                ctx.Spinner(Spinner.Known.Dots);
+                connectedDevices = _enumerator.EnumerateJoysticks();
+            });
+        
+        AnsiConsole.MarkupLine($"[green]Found {connectedDevices.Count} connected device(s).[/]\n");
         
         // Parse current IL2 devices file
         var il2Devices = _il2ConfigService.ParseDevicesFile(config.DevicesFilePath);
@@ -61,21 +69,22 @@ public class UpdateCommand
         var warnings = new List<string>();
         var matchedDevices = new Dictionary<DeviceMapping, JoystickDevice>();
         
-        Console.WriteLine("Checking device mappings...\n");
+        AnsiConsole.MarkupLine("[yellow]Checking device mappings...[/]\n");
         
         foreach (var mapping in config.DeviceMappings)
         {
             var connectedDevice = connectedDevices.FirstOrDefault(d => 
                 d.UniqueIdentifier == mapping.UniqueIdentifier);
             
+            
             if (connectedDevice == null)
             {
-                errors.Add($"Device not found: [{mapping.ExpectedIndex}] {mapping.Name} (ID: {mapping.UniqueIdentifier})");
+                errors.Add($"Device not found: [joy{mapping.ExpectedIndex}] {Markup.Escape(mapping.Name)}");
             }
             else
             {
                 matchedDevices[mapping] = connectedDevice;
-                Console.WriteLine($"? Found: [{mapping.ExpectedIndex}] {mapping.Name}");
+                AnsiConsole.MarkupLine($"  [green]?[/] Found: [cyan]joy{mapping.ExpectedIndex}[/] {Markup.Escape(mapping.Name)}");
             }
         }
         
@@ -86,24 +95,28 @@ public class UpdateCommand
         
         foreach (var dup in duplicates)
         {
-            errors.Add($"Duplicate device mapping: {dup.First().Value.Name} is mapped multiple times");
+            errors.Add($"Duplicate device mapping: {dup.First().Value.Name}");
         }
         
         // Report errors and abort if any
         if (errors.Count > 0)
         {
-            Console.WriteLine("\n=== ERRORS ===");
-            foreach (var error in errors)
+            AnsiConsole.WriteLine();
+            var errorPanel = new Panel(string.Join("\n", errors.Select(e => $"[red]?[/] {e}")))
             {
-                Console.WriteLine($"? {error}");
-            }
-            Console.WriteLine("\nAborting due to device errors.");
-            Console.WriteLine("Please connect all configured devices and try again.");
+                Header = new PanelHeader(" [red]ERRORS[/] ", Justify.Left),
+                Border = BoxBorder.Rounded,
+                BorderStyle = new Style(Color.Red)
+            };
+            AnsiConsole.Write(errorPanel);
+            
+            AnsiConsole.MarkupLine("\n[red]Aborting due to device errors.[/]");
+            AnsiConsole.MarkupLine("[yellow]Please connect all configured devices and try again.[/]");
             return 1;
         }
         
         // Determine current IL2 indices for matched devices
-        Console.WriteLine("\nChecking IL2 device indices...\n");
+        AnsiConsole.MarkupLine("\n[yellow]Checking IL2 device indices...[/]\n");
         
         var indexMapping = new Dictionary<int, int>(); // old index -> new index
         var devicesNeedingUpdate = new List<(DeviceMapping Mapping, Il2Device? CurrentIl2Device, int? CurrentIndex)>();
@@ -118,51 +131,72 @@ public class UpdateCommand
             {
                 if (currentIl2Device.Id != mapping.ExpectedIndex)
                 {
-                    Console.WriteLine($"  Index change needed: {mapping.Name}");
-                    Console.WriteLine($"    Current: joy{currentIl2Device.Id} -> Expected: joy{mapping.ExpectedIndex}");
+                    AnsiConsole.MarkupLine($"  [yellow]?[/] Index change needed: [cyan]{Markup.Escape(mapping.Name)}[/]");
+                    AnsiConsole.MarkupLine($"    [dim]Current:[/] [red]joy{currentIl2Device.Id}[/] [dim]?[/] [green]joy{mapping.ExpectedIndex}[/]");
                     
                     indexMapping[currentIl2Device.Id] = mapping.ExpectedIndex;
                     devicesNeedingUpdate.Add((mapping, currentIl2Device, currentIl2Device.Id));
                 }
                 else
                 {
-                    Console.WriteLine($"  ? {mapping.Name} - joy{currentIl2Device.Id} (OK)");
+                    AnsiConsole.MarkupLine($"  [green]?[/] {Markup.Escape(mapping.Name)} - [cyan]joy{currentIl2Device.Id}[/] [dim](OK)[/]");
                 }
             }
             else
             {
-                warnings.Add($"Device {mapping.Name} not found in IL2 devices.txt - may need to re-init");
+                warnings.Add($"Device {Markup.Escape(mapping.Name)} not found in IL2 devices.txt");
             }
         }
         
         // Report warnings
         if (warnings.Count > 0)
         {
-            Console.WriteLine("\n=== WARNINGS ===");
-            foreach (var warning in warnings)
+            AnsiConsole.WriteLine();
+            var warningPanel = new Panel(string.Join("\n", warnings.Select(w => $"[yellow]?[/] {w}")))
             {
-                Console.WriteLine($"? {warning}");
-            }
+                Header = new PanelHeader(" [yellow]WARNINGS[/] ", Justify.Left),
+                Border = BoxBorder.Rounded,
+                BorderStyle = new Style(Color.Yellow)
+            };
+            AnsiConsole.Write(warningPanel);
+            AnsiConsole.MarkupLine("\n[dim]Consider running[/] [cyan]il2joy2 init[/] [dim]again if devices are missing.[/]");
         }
         
         // Apply updates if needed
         if (indexMapping.Count > 0)
         {
-            Console.WriteLine($"\n{indexMapping.Count} index change(s) required.");
+            AnsiConsole.WriteLine();
+            AnsiConsole.MarkupLine($"[yellow]{indexMapping.Count} index change(s) required.[/]\n");
             
-            // Update IL2 devices.txt
-            Console.WriteLine("\nUpdating IL2 devices file...");
-            UpdateIl2DevicesFile(config.DevicesFilePath, il2Devices, devicesNeedingUpdate);
+            AnsiConsole.Status()
+                .Start("[yellow]Updating configuration files...[/]", ctx =>
+                {
+                    ctx.Spinner(Spinner.Known.Dots);
+                    
+                    // Update IL2 devices.txt
+                    ctx.Status("[yellow]Updating IL2 devices file...[/]");
+                    UpdateIl2DevicesFile(config.DevicesFilePath, il2Devices, devicesNeedingUpdate);
+                    
+                    // Update bindings file
+                    ctx.Status("[yellow]Updating IL2 bindings file...[/]");
+                    _il2ConfigService.UpdateBindingsFile(config.BindingsFilePath, indexMapping);
+                });
             
-            // Update bindings file
-            Console.WriteLine("Updating IL2 bindings file...");
-            _il2ConfigService.UpdateBindingsFile(config.BindingsFilePath, indexMapping);
-            
-            Console.WriteLine("\n? Configuration updated successfully.");
+            var successPanel = new Panel("[green]? Configuration updated successfully![/]")
+            {
+                Border = BoxBorder.Rounded,
+                BorderStyle = new Style(Color.Green)
+            };
+            AnsiConsole.Write(successPanel);
         }
         else
         {
-            Console.WriteLine("\n? All devices are correctly configured. No changes needed.");
+            var okPanel = new Panel("[green]? All devices are correctly configured. No changes needed.[/]")
+            {
+                Border = BoxBorder.Rounded,
+                BorderStyle = new Style(Color.Green)
+            };
+            AnsiConsole.Write(okPanel);
         }
         
         return 0;

@@ -1,5 +1,6 @@
 using Il2Joy2.Models;
 using Il2Joy2.Services;
+using Spectre.Console;
 
 namespace Il2Joy2.Commands;
 
@@ -19,55 +20,90 @@ public class ViewCommand
     
     public int Execute()
     {
-        Console.WriteLine("=== IL2 Joystick Manager - Device View ===\n");
+        AnsiConsole.Write(new Rule("[cyan1]Device View[/]").LeftJustified());
+        AnsiConsole.WriteLine();
         
         // Get current devices
-        Console.WriteLine("Scanning for connected joystick devices...\n");
+        AnsiConsole.Status()
+            .Start("[yellow]Scanning for connected joystick devices...[/]", ctx =>
+            {
+                ctx.Spinner(Spinner.Known.Dots);
+                Thread.Sleep(500); // Brief pause for visual effect
+            });
+        
         var devices = _enumerator.EnumerateJoysticks();
         
         if (devices.Count == 0)
         {
-            Console.WriteLine("No joystick devices found.");
-            Console.WriteLine("\nNote: Make sure your devices are connected and recognized by Windows.");
+            AnsiConsole.MarkupLine("[yellow]No joystick devices found.[/]");
+            AnsiConsole.MarkupLine("\n[dim]Note: Make sure your devices are connected and recognized by Windows.[/]");
             return 0;
         }
         
-        Console.WriteLine($"Found {devices.Count} device(s):\n");
-        Console.WriteLine(new string('-', 80));
+        AnsiConsole.MarkupLine($"[green]Found {devices.Count} device(s):[/]\n");
+        
+        // Create device table
+        var table = new Table()
+            .Border(TableBorder.Rounded)
+            .BorderColor(Color.Cyan1)
+            .AddColumn(new TableColumn("[cyan]Property[/]").Width(15))
+            .AddColumn(new TableColumn("[green]Value[/]"));
         
         foreach (var device in devices)
         {
-            Console.WriteLine($"Device: {device.Name}");
-            Console.WriteLine($"  Instance ID: {device.DeviceInstanceId}");
-            Console.WriteLine($"  GUID:        {device.Guid}");
-            Console.WriteLine($"  Vendor ID:   {device.VendorId ?? "N/A"}");
-            Console.WriteLine($"  Product ID:  {device.ProductId ?? "N/A"}");
-            Console.WriteLine($"  Unique ID:   {device.UniqueIdentifier}");
-            Console.WriteLine(new string('-', 80));
+            table.AddRow("[yellow]Device[/]", $"[bold]{Markup.Escape(device.Name)}[/]");
+            table.AddRow("[dim]Instance ID[/]", $"[dim]{Markup.Escape(device.DeviceInstanceId)}[/]");
+            table.AddRow("[dim]GUID[/]", $"[cyan]{Markup.Escape(device.Guid)}[/]");
+            table.AddRow("[dim]Vendor ID[/]", $"[green]{Markup.Escape(device.VendorId ?? "N/A")}[/]");
+            table.AddRow("[dim]Product ID[/]", $"[green]{Markup.Escape(device.ProductId ?? "N/A")}[/]");
+            table.AddRow("[dim]Unique ID[/]", $"[blue]{Markup.Escape(device.UniqueIdentifier)}[/]");
+            
+            if (device != devices.Last())
+                table.AddEmptyRow();
         }
+        
+        AnsiConsole.Write(table);
+        AnsiConsole.WriteLine();
         
         // Show stored configuration if available
         var config = _configService.LoadConfig();
         if (config != null)
         {
-            Console.WriteLine("\n=== Stored Configuration ===\n");
-            Console.WriteLine($"Devices file: {config.DevicesFilePath}");
-            Console.WriteLine($"Bindings file: {config.BindingsFilePath}");
-            Console.WriteLine($"\nConfigured mappings ({config.DeviceMappings.Count}):");
+            AnsiConsole.Write(new Rule("[cyan1]Stored Configuration[/]").LeftJustified());
+            AnsiConsole.WriteLine();
+            
+            AnsiConsole.MarkupLine($"[dim]Devices file:[/] [yellow]{config.DevicesFilePath}[/]");
+            AnsiConsole.MarkupLine($"[dim]Bindings file:[/] [yellow]{config.BindingsFilePath}[/]");
+            AnsiConsole.MarkupLine($"\n[cyan]Configured mappings ({config.DeviceMappings.Count}):[/]\n");
+            
+            var mappingTable = new Table()
+                .Border(TableBorder.Rounded)
+                .BorderColor(Color.Grey)
+                .AddColumn(new TableColumn("[cyan]Index[/]").Centered())
+                .AddColumn(new TableColumn("[green]Device Name[/]"))
+                .AddColumn(new TableColumn("[blue]Unique ID[/]"))
+                .AddColumn(new TableColumn("[yellow]Status[/]").Centered());
             
             foreach (var mapping in config.DeviceMappings.OrderBy(m => m.ExpectedIndex))
             {
                 var currentDevice = devices.FirstOrDefault(d => d.UniqueIdentifier == mapping.UniqueIdentifier);
-                var status = currentDevice != null ? "? Connected" : "? NOT FOUND";
+                var status = currentDevice != null 
+                    ? "[green]? Connected[/]" 
+                    : "[red]? NOT FOUND[/]";
                 
-                Console.WriteLine($"  [{mapping.ExpectedIndex}] {mapping.Name}");
-                Console.WriteLine($"      Unique ID: {mapping.UniqueIdentifier}");
-                Console.WriteLine($"      Status: {status}");
+                mappingTable.AddRow(
+                    $"[cyan]joy{mapping.ExpectedIndex}[/]",
+                    Markup.Escape(mapping.Name),
+                    $"[dim]{Markup.Escape(mapping.UniqueIdentifier)}[/]",
+                    status
+                );
             }
+            
+            AnsiConsole.Write(mappingTable);
         }
         else
         {
-            Console.WriteLine("\nNo configuration found. Run with 'init' to create initial configuration.");
+            AnsiConsole.MarkupLine("\n[yellow]No configuration found.[/] Run [cyan]il2joy2 init[/] to create initial configuration.");
         }
         
         return 0;
