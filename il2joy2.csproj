@@ -1,0 +1,38 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    
+    <!-- Size optimization -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <StackTraceSupport>false</StackTraceSupport>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+    <DebuggerSupport>false</DebuggerSupport>
+    <EnableUnsafeBinaryFormatterSerialization>false</EnableUnsafeBinaryFormatterSerialization>
+    <MetadataUpdaterSupport>false</MetadataUpdaterSupport>
+    <EventSourceSupport>false</EventSourceSupport>
+    <HttpActivityPropagationSupport>false</HttpActivityPropagationSupport>
+    
+    <!-- JSON AOT compatibility -->
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+  </PropertyGroup>
+
+  <!-- 
+    Publishing options:
+    
+    1. Native AOT (smallest, ~1.5MB) - requires C++ build tools:
+       dotnet publish -c Release -p:PublishAot=true
+    
+    2. Self-contained single file (~11MB) - no extra tools needed:
+       dotnet publish -c Release -p:PublishSingleFile=true -p:SelfContained=true -p:PublishTrimmed=true -p:EnableCompressionInSingleFile=true
+    
+    3. Framework-dependent (~150KB) - requires .NET runtime on target:
+       dotnet publish -c Release -p:PublishSingleFile=true -p:SelfContained=false
+  -->
+
+</Project>
