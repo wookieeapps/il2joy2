@@ -54,12 +54,33 @@ internal class Program
             return 1;
         }
         
-        var configFolder = args[1];
+        // Clean up the path - remove quotes, trailing slashes, and whitespace
+        var configFolder = args[1]
+            .Trim()
+            .Trim('"', '\'')
+            .TrimEnd('\\', '/');
+        
+        // Normalize the path
+        try
+        {
+            configFolder = Path.GetFullPath(configFolder);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"ERROR: Invalid path format: {args[1]}");
+            Console.WriteLine($"  Details: {ex.Message}");
+            return 1;
+        }
         
         // Validate folder exists
         if (!Directory.Exists(configFolder))
         {
             Console.WriteLine($"ERROR: Folder not found: {configFolder}");
+            Console.WriteLine();
+            Console.WriteLine("Troubleshooting tips:");
+            Console.WriteLine("  - Make sure the path is enclosed in quotes if it contains spaces");
+            Console.WriteLine(@"  - Example: il2joy2 init ""C:\Path With Spaces\input""");
+            Console.WriteLine($"  - Received argument: '{args[1]}'");
             return 1;
         }
         
