@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text;
@@ -23,6 +22,21 @@ public sealed partial class JoystickEnumerator
     private const int SPDRP_DEVICEDESC = 0x00;
     private const int SPDRP_HARDWAREID = 0x01;
 
+    // Known VIDs for flight sim / game controller manufacturers
+    private static readonly HashSet<string> KnownJoystickVids = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "044F", // Thrustmaster
+        "231D", // VKBsim
+        "3344", // VKBsim (alternate)
+        "06A3", // Saitek
+        "0738", // Mad Catz/Saitek
+        "045E", // Microsoft (Xbox)
+        "046D", // Logitech
+        "068E", // CH Products
+        "0C2E", // Virpil
+        "3288", // Virpil (alternate)
+    };
+
     /// <summary>
     /// Enumerates all connected joystick/gamepad devices
     /// </summary>
@@ -31,13 +45,121 @@ public sealed partial class JoystickEnumerator
         var devices = new List<JoystickDevice>();
         var seenKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        // Method 1: Use SetupAPI to enumerate HID devices
+        // Method 1: Use SetupAPI to enumerate currently connected HID devices
         EnumerateHidDevices(devices, seenKeys);
 
-        // Method 2: Check OEM registry for proper device names
+        // Method 2: Check DirectInput calibration registry (contains only connected joysticks)
+        EnumerateFromDirectInputRegistry(devices, seenKeys);
+
+        // Method 3: Enrich device names from OEM registry
         EnrichFromOemRegistry(devices, seenKeys);
 
         return devices;
+    }
+
+    /// <summary>
+    /// Enumerates joysticks from DirectInput calibration registry.
+    /// This registry key only contains devices that are currently connected.
+    /// </summary>
+    private void EnumerateFromDirectInputRegistry(List<JoystickDevice> devices, HashSet<string> seenKeys)
+    {
+        try
+        {
+            using var diKey = Registry.CurrentUser.OpenSubKey(
+                @"System\CurrentControlSet\Control\MediaProperties\PrivateProperties\DirectInput");
+
+            if (diKey == null)
+                return;
+
+            foreach (var guidKeyName in diKey.GetSubKeyNames())
+            {
+                try
+                {
+                    using var guidKey = diKey.OpenSubKey(guidKeyName);
+                    if (guidKey == null) continue;
+
+                    foreach (var calibrationKeyName in guidKey.GetSubKeyNames())
+                    {
+                        using var calibrationKey = guidKey.OpenSubKey(calibrationKeyName);
+                        if (calibrationKey == null) continue;
+
+                        // Check if device is currently connected by looking for Joystick Id
+                        var joystickId = calibrationKey.GetValue("Joystick Id");
+                        if (joystickId == null)
+                            continue;
+
+                        var vid = ExtractVidFromString(guidKeyName);
+                        var pid = ExtractPidFromString(guidKeyName);
+
+                        if (string.IsNullOrEmpty(vid) || string.IsNullOrEmpty(pid))
+                            continue;
+
+                        // Skip if already found
+                        var uniqueKey = $"{vid}:{pid}".ToLowerInvariant();
+                        if (seenKeys.Contains(uniqueKey))
+                            continue;
+
+                        // Get name from OEM registry or use calibration key name
+                        var name = GetOemNameForDevice(vid, pid) ?? calibrationKeyName;
+
+                        // Filter: must be known VID or game controller name
+                        if (!KnownJoystickVids.Contains(vid) && !IsGameControllerByName(name))
+                            continue;
+
+                        if (IsExcludedDevice(name))
+                            continue;
+
+                        seenKeys.Add(uniqueKey);
+
+                        var guid = FormatGuid(guidKeyName);
+                        
+                        devices.Add(new JoystickDevice
+                        {
+                            DeviceInstanceId = calibrationKeyName,
+                            Name = name,
+                            Guid = guid,
+                            VendorId = vid,
+                            ProductId = pid
+                        });
+                    }
+                }
+                catch
+                {
+                    // Continue with next device
+                }
+            }
+        }
+        catch
+        {
+            // DirectInput registry access failed
+        }
+    }
+
+    private static string? GetOemNameForDevice(string vid, string pid)
+    {
+        try
+        {
+            using var oemKey = Registry.CurrentUser.OpenSubKey(
+                $@"System\CurrentControlSet\Control\MediaProperties\PrivateProperties\Joystick\OEM\VID_{vid}&PID_{pid}");
+            
+            return oemKey?.GetValue("OEMName")?.ToString();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string FormatGuid(string rawGuid)
+    {
+        // Remove curly braces if present and format as standard GUID
+        rawGuid = rawGuid.Trim('{', '}');
+        if (rawGuid.Length == 32)
+        {
+            // Insert hyphens: 8-4-4-4-12
+            return $"{rawGuid[..8]}-{rawGuid.Substring(8, 4)}-{rawGuid.Substring(12, 4)}-{rawGuid.Substring(16, 4)}-{rawGuid[20..]}".ToLowerInvariant();
+        }
+        return rawGuid.ToLowerInvariant();
     }
 
 
@@ -77,8 +199,15 @@ public sealed partial class JoystickEnumerator
 
                 var name = deviceDesc ?? "Unknown Device";
 
-                // Filter: must be a game controller
-                if (!IsGameControllerByName(name))
+                // Filter: must be a game controller by name OR known joystick VID
+                var isKnownVid = KnownJoystickVids.Contains(vid);
+                var isGameController = IsGameControllerByName(name);
+                
+                if (!isKnownVid && !isGameController)
+                    continue;
+
+                // Skip excluded devices even if VID matches (e.g., Logitech keyboards)
+                if (IsExcludedDevice(name))
                     continue;
 
                 var uniqueKey = $"{vid}:{pid}".ToLowerInvariant();
@@ -138,8 +267,16 @@ public sealed partial class JoystickEnumerator
         return null;
     }
 
+
+    /// <summary>
+    /// Enriches already-detected devices with better names from the OEM registry.
+    /// Does NOT add new devices - only updates names of devices found by SetupAPI.
+    /// </summary>
     private void EnrichFromOemRegistry(List<JoystickDevice> devices, HashSet<string> seenKeys)
     {
+        if (devices.Count == 0)
+            return;
+
         try
         {
             using var oemKey = Registry.CurrentUser.OpenSubKey(
@@ -152,50 +289,33 @@ public sealed partial class JoystickEnumerator
             {
                 try
                 {
-                    using var deviceKey = oemKey.OpenSubKey(vidPidKey);
-                    if (deviceKey == null) continue;
-
-                    var oemName = deviceKey.GetValue("OEMName")?.ToString();
-                    if (string.IsNullOrEmpty(oemName))
-                        continue;
-
                     var vid = ExtractVidFromString(vidPidKey);
                     var pid = ExtractPidFromString(vidPidKey);
 
                     if (string.IsNullOrEmpty(vid) || string.IsNullOrEmpty(pid))
                         continue;
 
-                    // Update existing device with better name
+                    // Only update existing devices - don't add new ones from registry
                     var existingDevice = devices.Find(d =>
                         string.Equals(d.VendorId, vid, StringComparison.OrdinalIgnoreCase) &&
                         string.Equals(d.ProductId, pid, StringComparison.OrdinalIgnoreCase));
 
-                    if (existingDevice != null)
-                    {
-                        if (existingDevice.Name.Contains("HID", StringComparison.OrdinalIgnoreCase) ||
-                            existingDevice.Name.Contains("Unknown", StringComparison.OrdinalIgnoreCase))
-                        {
-                            existingDevice.Name = oemName;
-                        }
+                    if (existingDevice == null)
+                        continue; // Device not currently connected, skip it
+
+                    // Only update if current name is generic
+                    if (!existingDevice.Name.Contains("HID", StringComparison.OrdinalIgnoreCase) &&
+                        !existingDevice.Name.Contains("Unknown", StringComparison.OrdinalIgnoreCase))
                         continue;
+
+                    using var deviceKey = oemKey.OpenSubKey(vidPidKey);
+                    if (deviceKey == null) continue;
+
+                    var oemName = deviceKey.GetValue("OEMName")?.ToString();
+                    if (!string.IsNullOrEmpty(oemName))
+                    {
+                        existingDevice.Name = oemName;
                     }
-
-                    // Add new device from registry
-                    var uniqueKey = $"{vid}:{pid}".ToLowerInvariant();
-                    if (seenKeys.Contains(uniqueKey))
-                        continue;
-                    seenKeys.Add(uniqueKey);
-
-                    var guid = GenerateIl2StyleGuid(vid, pid, vidPidKey);
-
-                    devices.Add(new JoystickDevice
-                    {
-                        DeviceInstanceId = vidPidKey,
-                        Name = oemName,
-                        Guid = guid,
-                        VendorId = vid,
-                        ProductId = pid
-                    });
                 }
                 catch
                 {
@@ -214,23 +334,11 @@ public sealed partial class JoystickEnumerator
         if (string.IsNullOrEmpty(name))
             return false;
 
-        var lowerName = name.ToLowerInvariant();
-
         // Exclude non-controllers first
-        ReadOnlySpan<string> excludeKeywords =
-        [
-            "keyboard", "mouse", "touchpad", "hub", "host controller",
-            "card reader", "camera", "audio", "microphone", "speaker",
-            "storage", "disk", "bluetooth", "wireless adapter", "network",
-            "monitor", "display", "printer", "virtual", "root",
-            "system controller", "consumer control", "vendor-defined"
-        ];
+        if (IsExcludedDevice(name))
+            return false;
 
-        foreach (var keyword in excludeKeywords)
-        {
-            if (lowerName.Contains(keyword))
-                return false;
-        }
+        var lowerName = name.ToLowerInvariant();
 
         // Must match positive indicators
         ReadOnlySpan<string> positiveKeywords =
@@ -243,6 +351,31 @@ public sealed partial class JoystickEnumerator
         ];
 
         foreach (var keyword in positiveKeywords)
+        {
+            if (lowerName.Contains(keyword))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsExcludedDevice(string name)
+    {
+        if (string.IsNullOrEmpty(name))
+            return true;
+
+        var lowerName = name.ToLowerInvariant();
+
+        ReadOnlySpan<string> excludeKeywords =
+        [
+            "keyboard", "mouse", "touchpad", "hub", "host controller",
+            "card reader", "camera", "audio", "microphone", "speaker",
+            "storage", "disk", "bluetooth", "wireless adapter", "network",
+            "monitor", "display", "printer", "virtual", "root",
+            "system controller", "consumer control", "vendor-defined"
+        ];
+
+        foreach (var keyword in excludeKeywords)
         {
             if (lowerName.Contains(keyword))
                 return true;
